@@ -1,1 +1,2 @@
-Assignments completed for Stanford's CS231n course (Convolutional Neural Networks for Visual Recognition). All work is done inside the notebooks for ease of presentation.
+Assignments completed for Stanford's CS231n course (Convolutional Neural Networks for Visual Recognition). 
+Only edited files included. Refer to https://cs231n.github.io/ for any other code.
