@@ -543,8 +543,28 @@ def conv_forward_naive(x, w, b, conv_param):
     # Hint: you can use the function np.pad for padding.                      #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    N, C, H, W = x.shape
+    F, _, HH, WW = w.shape
+    pad, stride = conv_param["pad"], conv_param["stride"]
 
-    pass
+    padded = np.pad(x, [(0,0),(0,0),(pad,pad),(pad,pad)])
+    _, _, H_pad, W_pad = padded.shape
+
+    H_out = 1 + (H + 2 * pad - HH) // stride
+    W_out = 1 + (W + 2 * pad - WW) // stride
+    out = np.zeros((N,F,H_out,W_out))
+
+    # Using the im2col method mentioned in the notes https://cs231n.github.io/convolutional-networks/
+    # Implemented an iterator object for im2col below
+    w_row = w.reshape(F, C*HH*WW)
+    x_col = np.zeros((C*HH*WW, H_out*W_out))
+    for n in range(N):
+      for (i,rows,cols) in Im2colIter(H_pad, W_pad, HH, WW, stride):
+        block = padded[n,:,rows,cols]
+        x_col[:, i] = block.reshape(C*HH*WW)
+
+      affine = w_row@x_col + b.reshape(F,1)
+      out[n] = affine.reshape(F, H_out, W_out)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -553,6 +573,32 @@ def conv_forward_naive(x, w, b, conv_param):
     cache = (x, w, b, conv_param)
     return out, cache
 
+class Im2colIter():
+
+  def __init__(self, h, w, f_h, f_w, stride):
+    self.H, self.W = h, w
+    self.HH, self.WW  = f_h, f_w
+    self.stride = stride
+    self.rows = range(0, 1+self.H-f_h, stride)
+    self.cols = range(0, 1+self.W-f_w, stride)
+    self.row, self.col, self.i = 0, 0, 0
+
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+    if self.row>=len(self.rows):
+      raise StopIteration
+    else:
+      top = self.rows[self.row]
+      left = self.cols[self.col]
+      out = (self.i, slice(top,top+self.HH),slice(left,left+self.WW))
+      self.col += 1
+      self.i += 1
+      if self.col >= len(self.cols):
+        self.col = 0
+        self.row += 1
+      return out
 
 def conv_backward_naive(dout, cache):
     """
@@ -572,8 +618,24 @@ def conv_backward_naive(dout, cache):
     # TODO: Implement the convolutional backward pass.                        #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    x, w, _, conv_param = cache 
+    _, _, H, W = x.shape
+    F, _, HH, WW = w.shape
+    pad, stride = conv_param["pad"], conv_param["stride"]
 
-    pass
+    dx, dw = np.zeros(x.shape), np.zeros(w.shape)
+
+    padded = np.pad(x, [(0, 0), (0, 0), (pad, pad), (pad, pad)])
+    dpadded = np.pad(dx, [(0, 0), (0, 0), (pad, pad), (pad, pad)])
+    _, _, H_pad, W_pad = padded.shape
+
+    for f in range(F):
+      for (_,rows,cols) in Im2colIter(H_pad, W_pad, HH, WW, stride):
+        dpadded[:, :, rows, cols] += w[f][None,:,:,:] * dout[:, f, rows.start//stride, cols.start//stride][:,None,None,None]
+        dw[f] += np.sum(padded[:, :, rows, cols] * dout[:, f, rows.start//stride, cols.start//stride][:,None,None,None], axis=0)
+
+    dx = dpadded[:, :, pad:H+pad, pad:W+pad]
+    db = np.sum(dout, axis=(3,2,0))
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -606,8 +668,15 @@ def max_pool_forward_naive(x, pool_param):
     # TODO: Implement the max-pooling forward pass                            #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    N, C, H, W = x.shape
+    HH, WW = pool_param['pool_height'], pool_param['pool_width']
+    stride = pool_param["stride"]
 
-    pass
+    H_out = 1 + (H - HH) // stride
+    W_out = 1 + (W - WW) // stride
+    out = np.zeros((N, C, H_out, W_out))
+    for (_,rows,cols) in Im2colIter(H, W, HH, WW, stride):
+      out[:, :, rows.start//stride, cols.start//stride] = np.max(x[:, :, rows, cols], axis=(2, 3))
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -633,8 +702,20 @@ def max_pool_backward_naive(dout, cache):
     # TODO: Implement the max-pooling backward pass                           #
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+    x, pool_param = cache 
+    N, C, H, W = x.shape
+    HH, WW = pool_param['pool_height'], pool_param['pool_width']
+    stride = pool_param["stride"]
 
-    pass
+    dx = np.zeros(x.shape)
+
+    for n in range(N):
+        for c in range(C):
+          for (_,rows,cols) in Im2colIter(H, W, HH, WW, stride):
+            i, j = rows.start//stride, cols.start//stride
+            block = x[n, c, rows, cols]
+            max_ind = np.unravel_index(np.argmax(block, axis=None), block.shape)
+            dx[n, c, rows.start+max_ind[0], cols.start+max_ind[1]] = dout[n, c, i, j]
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -676,7 +757,10 @@ def spatial_batchnorm_forward(x, gamma, beta, bn_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = x.shape
+    x = x.transpose(0,2,3,1).reshape(N*H*W, C)
+    out, cache = batchnorm_forward(x, gamma, beta, bn_param)
+    out = out.reshape(N, H, W, C).transpose(0,3,1,2)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -710,7 +794,10 @@ def spatial_batchnorm_backward(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = dout.shape
+    dout = dout.transpose(0,2,3,1).reshape(N*H*W, C)
+    dx, dgamma, dbeta = batchnorm_backward_alt(dout, cache)
+    dx = dx.reshape(N, H, W, C).transpose(0,3,1,2)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -750,7 +837,17 @@ def spatial_groupnorm_forward(x, gamma, beta, G, gn_param):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = x.shape
+    size = (N*G, (C//G)*H*W)
+    x = x.reshape(size).T
+    mean = x.mean(axis=0)
+    std = np.sqrt(x.var(axis=0) + eps)
+    norm = (x - mean)/std
+    norm = norm.T.reshape(N, C, H, W)
+    gamma = gamma.reshape(1, C, 1, 1)
+    beta = beta.reshape(1, C, 1, 1)
+    out = gamma * norm + beta
+    cache={'std':std, 'gamma':gamma, 'norm':norm, 'size':size}
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
@@ -780,7 +877,17 @@ def spatial_groupnorm_backward(dout, cache):
     ###########################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    pass
+    N, C, H, W = dout.shape
+    size = cache['size']
+    norm = cache['norm'].reshape(size).T
+    M = norm.shape[0]
+    dbeta = dout.sum(axis=(0,2,3), keepdims=True)
+    dgamma = np.sum(dout * cache['norm'], axis=(0,2,3), keepdims=True)
+    dnorm = dout * cache['gamma']
+    dnorm = dnorm.reshape(size).T
+    dx = dnorm - np.sum(dnorm,axis=0)/M - np.sum(dnorm * norm,axis=0) * norm/M
+    dx /= cache['std']
+    dx = dx.T.reshape(N, C, H, W)
 
     # *****END OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
     ###########################################################################
